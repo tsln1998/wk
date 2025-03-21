@@ -7,6 +7,7 @@ use axum::extract::WebSocketUpgrade;
 use axum::response::IntoResponse;
 use axum::Json;
 use proto::agent::Events;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Finds the host with the given `machine_id` in the database and returns its
@@ -17,7 +18,7 @@ use tokio::sync::mpsc;
 ///
 /// Returns an error if database operations fail.
 pub async fn config(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
 ) -> Result<Json<proto::agent::Config>, AxumError> {
     // find or create target host
@@ -39,12 +40,12 @@ pub async fn config(
 /// to the eventbus fails.
 
 pub async fn report(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
     Json(values): Json<Vec<serde_json::Value>>,
 ) -> Result<(), AxumError> {
     // create event pipeline
-    let tx = internal::eventbus_with_machine_id(&state, &machine_id).await?;
+    let tx = internal::eventbus_with_machine_id(state, &machine_id).await?;
 
     // dispatch all events
     for value in values {
@@ -69,12 +70,12 @@ pub async fn report(
 /// function. If the handler encounters an error, the connection is
 /// terminated.
 pub async fn websocket(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
     upgrade: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, AxumError> {
     // create event pipeline
-    let tx = internal::eventbus_with_machine_id(&state, &machine_id).await?;
+    let tx = internal::eventbus_with_machine_id(state, &machine_id).await?;
 
     Ok(upgrade.on_upgrade(move |mut ws| async move {
         // translate websocket message
@@ -145,7 +146,10 @@ mod internal {
     use crate::state::AppState;
     use anyhow::Result;
     use proto::agent::Events;
+    use proto::agent::EvtMachineEmit;
+    use proto::agent::EvtOsEmit;
     use sea_orm::IntoActiveValue;
+    use std::sync::Arc;
     use tokio::sync::mpsc;
 
     /// Finds the host with the given `machine_id` in the database and returns it. If the host
@@ -211,94 +215,102 @@ mod internal {
     ///
     /// Returns an error if database operations fail.
     pub async fn eventbus_with_machine_id(
-        state: &AppState,
+        state: Arc<AppState>,
         machine_id: &str,
     ) -> Result<mpsc::Sender<proto::agent::Events>> {
-        let state = state.clone();
-        let machine_id = machine_id.to_owned();
-
-        let target = upsert_host_with_machine_id(&state, &machine_id).await?;
+        let target = upsert_host_with_machine_id(&state, machine_id).await?;
 
         // create tokio channel
         let (tx, mut rx) = mpsc::channel::<proto::agent::Events>(16);
-        tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                // received event from client
-                tracing::debug!("received event from {}: {:?}", &target.machine_id, &event);
+        tokio::spawn({
+            let state = state.clone();
 
-                // dispatch to handler
-                if let Err(err) = eventbus_handler(&state, &target, event).await {
-                    tracing::warn!("eventbus handler failed: {}", err);
-                };
+            async move {
+                while let Some(event) = rx.recv().await {
+                    // received event from client
+                    tracing::debug!("received event from {}: {:?}", &target.machine_id, &event);
+
+                    // dispatch to handler
+                    if let Err(err) = eventbus_handler(&state, &target, event).await {
+                        tracing::warn!("eventbus handler failed: {}", err);
+                    };
+                }
             }
         });
 
         Ok(tx)
     }
 
-    /// Handles events sent to the eventbus.
+    /// Handles an `Events` enum by dispatching it to the appropriate handler.
     ///
-    /// This function is responsible for processing events sent to the eventbus. It currently does
-    /// nothing, but it may do so in the future.
+    /// This function takes an `event` of type `Events` and matches it to call
+    /// the corresponding event handler function.
     ///
     /// # Errors
     ///
-    /// Returns an error if the event cannot be processed.
-    pub async fn eventbus_handler(
-        state: &AppState,
-        target: &host::Model,
-        event: Events,
-    ) -> Result<()> {
+    /// Returns an error if the event handling fails, which could be due to
+    /// database operation errors.
+    async fn eventbus_handler(state: &AppState, target: &host::Model, event: Events) -> Result<()> {
         match event {
             Events::EvtMachineEmit(machine) => {
-                Host::update(host::ActiveModel {
-                    id: Set(target.id),
-                    machine_ip: Set(machine.ip),
-                    machine_country: if let Some(country) = machine.country {
-                        Set(country)
-                    } else {
-                        NotSet
-                    },
-                    ..Default::default()
-                })
-                .exec(state.database.as_ref())
-                .await?;
+                eventbus_handle_machine_emit(state, target, machine).await?;
             }
             Events::EvtOsEmit(os) => {
-                Host::update(host::ActiveModel {
-                    id: Set(target.id),
-                    os_family: os.family.into_active_value(),
-                    os_name: if let Some(name) = os.name {
-                        Set(name)
-                    } else {
-                        NotSet
-                    },
-                    os_version: if let Some(version) = os.version {
-                        Set(version)
-                    } else {
-                        NotSet
-                    },
-                    os_arch: if let Some(arch) = os.arch {
-                        Set(arch)
-                    } else {
-                        NotSet
-                    },
-                    os_build: if let Some(build) = os.build {
-                        Set(build)
-                    } else {
-                        NotSet
-                    },
-                    os_virtualization: if let Some(virtualization) = os.virtualization {
-                        Set(virtualization)
-                    } else {
-                        NotSet
-                    },
-                    ..Default::default()
-                })
-                .exec(state.database.as_ref())
-                .await?;
+                eventbus_handle_os_emit(state, target, os).await?;
             }
         }
+        Ok(())
+    }
+
+    /// Handles a `EvtMachineEmit` event sent to the eventbus.
+    ///
+    /// This function updates the `machine_*` fields of the host.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database operations fail.
+    async fn eventbus_handle_machine_emit(
+        state: &AppState,
+        target: &host::Model,
+        machine: EvtMachineEmit,
+    ) -> Result<()> {
+        Host::update(host::ActiveModel {
+            id: target.id.into_active_value(),
+            machine_ip: machine.ip.into_active_value(),
+            machine_country: machine.country.into_active_value_(),
+            ..Default::default()
+        })
+        .exec(state.database.as_ref())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Handles an `EvtOsEmit` event sent to the eventbus.
+    ///
+    /// This function updates the `os_*` fields of the host.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database operations fail.
+    async fn eventbus_handle_os_emit(
+        state: &AppState,
+        target: &host::Model,
+        os: EvtOsEmit,
+    ) -> Result<()> {
+        Host::update(host::ActiveModel {
+            id: target.id.into_active_value(),
+            os_family: os.family.into_active_value(),
+            os_name: os.name.into_active_value_(),
+            os_version: os.version.into_active_value_(),
+            os_arch: os.arch.into_active_value_(),
+            os_build: os.build.into_active_value_(),
+            os_virtualization: os.virtualization.into_active_value_(),
+            ..Default::default()
+        })
+        .exec(state.database.as_ref())
+        .await?;
+
         Ok(())
     }
 }

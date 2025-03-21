@@ -8,6 +8,7 @@ use sea_orm::ConnectOptions;
 use sea_orm::Database;
 use sea_orm::DatabaseConnection;
 use state::AppState;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::select;
 use tokio::signal;
@@ -46,7 +47,7 @@ async fn main() -> Result<()> {
     let database = make_database(&args).await?;
 
     // create app state
-    let state = AppState::new(args, database);
+    let state = Arc::new(AppState::new(args, database));
 
     // create a router
     let router = crate::route::make()
