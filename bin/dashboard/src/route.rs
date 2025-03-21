@@ -21,8 +21,8 @@ pub fn make_auth() -> Router<AppState> {
 
 pub fn make_agent() -> Router<AppState> {
     Router::new()
-        .route("/config", routing::get(api::agent::config))
-        .route("/report", routing::any(|| async { "" }))
+        .route("/{machine_id}/config", routing::get(api::agent::config))
+        .route("/{machine_id}/report", routing::any(|| async { "" }))
 }
 
 pub fn make_admin() -> Router<AppState> {

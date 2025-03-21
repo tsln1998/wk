@@ -18,6 +18,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 mod api;
 mod args;
+mod prelude;
 mod route;
 mod state;
 
@@ -114,10 +115,13 @@ async fn make_database(args: &Args) -> Result<DatabaseConnection> {
     })
 }
 
-/// Creates a future that completes on SIGINT or SIGTERM.
+/// Creates a broadcast channel that can be used to signal shutdown to other tasks.
 ///
-/// This function returns a future that completes when either the SIGINT or SIGTERM signal is
-/// received. The future will not complete if the program is running on Windows.
+/// The returned receiver can be used to receive a shutdown signal. When the signal is
+/// received, the task should shut down.
+///
+/// The shutdown signal is sent when either a CTRL-C signal is received, or a SIGTERM
+/// signal is received.
 fn make_shutdown_signal() -> broadcast::Receiver<()> {
     // create broadcast channel
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);

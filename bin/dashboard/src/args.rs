@@ -4,7 +4,7 @@ pub struct Args {
     #[arg(
         short,
         long,
-        default_value = "127.0.0.1:5060",
+        default_value = "127.0.0.1:5000",
         help = "HTTP listen address"
     )]
     pub listen: String,

@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct AppState {
-    pub args: Args,
+    pub _args: Args,
     pub database: Arc<DatabaseConnection>,
 }
 
 impl AppState {
     pub fn new(args: Args, database: DatabaseConnection) -> Self {
         Self {
-            args: args,
+            _args: args,
             database: Arc::new(database),
         }
     }
