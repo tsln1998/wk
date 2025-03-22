@@ -1,33 +1,39 @@
 use crate::api;
+use crate::middlewares::authorized_token_opt;
 use crate::state::AppState;
+use axum::middleware::map_request_with_state;
 use axum::routing;
 use axum::Router;
 use std::sync::Arc;
+use tower_http::trace::TraceLayer;
 
-pub fn make() -> Router<Arc<AppState>> {
+pub fn make(state: Arc<AppState>) -> Router {
     Router::new()
-        .nest("/api/auth", make_auth())
-        .nest("/api/agent", make_agent())
-        .nest("/api/admin", make_admin())
-        .nest("/api/dashboard", make_dashboard())
+        .nest("/api/auth", make_auth(state.clone()))
+        .nest("/api/agent", make_agent(state.clone()))
+        .nest("/api/admin", make_admin(state.clone()))
+        .nest("/api/dashboard", make_dashboard(state.clone()))
+        .with_state(state)
+        .layer(TraceLayer::new_for_http())
 }
 
-pub fn make_auth() -> Router<Arc<AppState>> {
+fn make_auth(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/init", routing::post(|| async { "" }))
         .route("/captcha", routing::get(|| async { "" }))
         .route("/authorize", routing::get(|| async { "" }))
         .route("/authorize", routing::post(|| async { "" }))
+        .layer(map_request_with_state(state.clone(), authorized_token_opt))
 }
 
-pub fn make_agent() -> Router<Arc<AppState>> {
+fn make_agent(_: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/{machine_id}/config", routing::get(api::agent::config))
         .route("/{machine_id}/report", routing::post(api::agent::report))
         .route("/{machine_id}/report", routing::get(api::agent::websocket))
 }
 
-pub fn make_admin() -> Router<Arc<AppState>> {
+fn make_admin(_: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/config", routing::get(|| async { "" }))
         .route("/config", routing::post(|| async { "" }))
@@ -43,7 +49,7 @@ pub fn make_admin() -> Router<Arc<AppState>> {
         .route("/users/{id}", routing::delete(|| async { "" }))
 }
 
-pub fn make_dashboard() -> Router<Arc<AppState>> {
+fn make_dashboard(_: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/config", routing::get(|| async { "" }))
         .route("/summary", routing::get(|| async { "" }))

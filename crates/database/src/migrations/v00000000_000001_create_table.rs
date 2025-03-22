@@ -24,9 +24,37 @@ enum Host {
     HashedNetwork,
 }
 
+#[derive(DeriveIden)]
+enum User {
+    Table,
+    Id,
+    Sa,
+    Nickname,
+    Email,
+    Password,
+    CreatedAt,
+    UpdatedAt,
+}
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(User::Table)
+                    .if_not_exists()
+                    .col(pk_uuid(User::Id))
+                    .col(boolean(User::Sa).default(false))
+                    .col(string(User::Nickname).string_len(64))
+                    .col(string(User::Email).string_len(64))
+                    .col(string(User::Password).string_len(64))
+                    .col(timestamp(User::CreatedAt).default(Expr::current_timestamp()))
+                    .col(timestamp(User::UpdatedAt).default(Expr::current_timestamp()))
+                    .to_owned(),
+            )
+            .await?;
+
         manager
             .create_table(
                 Table::create()
@@ -50,12 +78,17 @@ impl MigrationTrait for Migration {
                     .col(integer(Host::HashedNetwork))
                     .to_owned(),
             )
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .drop_table(Table::drop().table(Host::Table).to_owned())
-            .await
+            .await?;
+        manager
+            .drop_table(Table::drop().table(User::Table).to_owned())
+            .await?;
+        Ok(())
     }
 }

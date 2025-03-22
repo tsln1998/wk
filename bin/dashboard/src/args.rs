@@ -15,4 +15,10 @@ pub struct Args {
         help = "Database connection string"
     )]
     pub database: String,
+    #[arg(
+        short,
+        long,
+        help = "Authorize token signature key (default: random key)"
+    )]
+    pub secret: Option<String>,
 }

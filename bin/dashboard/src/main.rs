@@ -13,12 +13,12 @@ use tokio::net::TcpListener;
 use tokio::select;
 use tokio::signal;
 use tokio::sync::broadcast;
-use tower_http::trace::TraceLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod api;
 mod args;
+mod middlewares;
 mod prelude;
 mod route;
 mod state;
@@ -42,6 +42,9 @@ async fn main() -> Result<()> {
     // parse command line arguments
     let args = Args::parse();
 
+    // create shutdown signal receiver
+    let mut shutdown = make_shutdown_signal();
+
     // create a TCP listener and a database connection
     let listener = make_listener(&args).await?;
     let database = make_database(&args).await?;
@@ -50,27 +53,19 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState::new(args, database));
 
     // create a router
-    let router = crate::route::make()
-        .with_state(state.clone())
-        .layer(TraceLayer::new_for_http());
-
-    // create shutdown signal receiver
-    let mut shutdown = make_shutdown_signal();
+    let router = crate::route::make(state.clone());
 
     // start server
-    let server = serve(listener, router).with_graceful_shutdown({
-        async move {
-            // TODO: spawn daemon task
+    serve(listener, router)
+        .with_graceful_shutdown({
+            async move {
+                // TODO: spawn daemon task
 
-            // wait for shutdown signal
-            shutdown.recv().await.unwrap()
-        }
-    });
-
-    tracing::info!("listening on {}", server.local_addr()?);
-
-    // wait server stop
-    server.await?;
+                // wait for shutdown signal
+                shutdown.recv().await.unwrap()
+            }
+        })
+        .await?;
 
     // TODO: wait daemon task stop
 
@@ -89,7 +84,10 @@ async fn main() -> Result<()> {
 ///
 /// Returns an error if the TCP listener cannot be bound to the given address.
 async fn make_listener(args: &Args) -> Result<TcpListener> {
-    Ok(TcpListener::bind(&args.listen).await?)
+    let listener = TcpListener::bind(&args.listen).await?;
+    tracing::info!("listening on {}", listener.local_addr()?);
+
+    Ok(listener)
 }
 
 /// Create a database connection with migrations applied.

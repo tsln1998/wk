@@ -9,6 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.97"
+jsonwebtoken = { version = "9.3.1", default-features = false }
 axum = { version = "0.8.1", features = ["ws"] }
 database = { path = "./crates/database" }
 proto = { path = "./crates/proto" }
@@ -19,6 +20,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
+tower = { version = "0.5.2" }
 tower-http = { version = "0.6.2", features = ["trace"] }
 sea-orm = { version = "1.1.7", features = [
     "sqlx-sqlite",
