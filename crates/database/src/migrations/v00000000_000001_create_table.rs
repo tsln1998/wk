@@ -36,9 +36,29 @@ enum User {
     UpdatedAt,
 }
 
+#[derive(DeriveIden)]
+enum Captcha {
+    Table,
+    Id,
+    Answer,
+    ExpiredAt,
+}
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(Captcha::Table)
+                    .if_not_exists()
+                    .col(pk_uuid(Captcha::Id))
+                    .col(string(Captcha::Answer))
+                    .col(timestamp(Captcha::ExpiredAt))
+                    .to_owned(),
+            )
+            .await?;
+
         manager
             .create_table(
                 Table::create()
@@ -83,6 +103,9 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(Captcha::Table).to_owned())
+            .await?;
         manager
             .drop_table(Table::drop().table(Host::Table).to_owned())
             .await?;

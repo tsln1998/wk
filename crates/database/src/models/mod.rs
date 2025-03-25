@@ -2,5 +2,6 @@
 
 pub mod prelude;
 
+pub mod captcha;
 pub mod host;
 pub mod user;
