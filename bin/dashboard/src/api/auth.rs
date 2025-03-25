@@ -5,6 +5,7 @@ use axum::extract::State;
 use axum::Json;
 use proto::auth::captcha::CaptchaGenerateReq;
 use proto::auth::captcha::CaptchaGenerateResp;
+use proto::auth::init::InitReq;
 use std::sync::Arc;
 
 /// Generates a new captcha image.
@@ -24,8 +25,7 @@ pub async fn captcha(
     Query(query): Query<CaptchaGenerateReq>,
 ) -> Result<Json<CaptchaGenerateResp>, AxumError> {
     // polyfill width and height
-    let width = query.w.unwrap_or(220);
-    let height = query.h.unwrap_or(120);
+    let (width, height) = (query.w.unwrap_or(220), query.h.unwrap_or(120));
 
     // generate captcha
     let (id, base64) = internal::captcha_generate(&state, width, height).await?;
@@ -33,17 +33,118 @@ pub async fn captcha(
     Ok(Json(CaptchaGenerateResp { id, base64 }))
 }
 
+/// Initializes the application.
+///
+/// This endpoint takes a JSON object with the following fields:
+///
+/// - `email`: The email address of the first admin user.
+/// - `password`: The password of the first admin user.
+///
+/// If the application is not initialized, this endpoint will check the captcha
+/// and create the first admin user.
+///
+pub async fn init(
+    State(state): State<Arc<AppState>>,
+    Json(query): Json<InitReq>,
+) -> Result<(), AxumError> {
+    // verify captcha
+    internal::captcha_verify(&state, &query.captcha_id, &query.captcha_answer).await?;
+
+    // execute initlizate workflow if not initlizated
+    if !internal::initlizated(&state).await? {
+        internal::initlizate(&state, &query.email, &query.password).await?;
+    }
+
+    Ok(())
+}
+
 mod internal {
     use crate::state::AppState;
     use anyhow::anyhow;
     use anyhow::Result;
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::SaltString;
+    use argon2::Argon2;
+    use argon2::PasswordHasher;
     use captcha::filters::Noise;
     use captcha::Captcha;
     use database::models::captcha as captcha_;
     use database::models::captcha::Entity as Captcha_;
+    use database::models::user;
+    use database::models::user::Entity as User;
     use sea_orm::prelude::*;
     use sea_orm::IntoActiveModel;
     use std::str::FromStr;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    /// Atomic boolean to check if the database has been initialized
+    ///
+    /// if this value is true, checks can fast returning
+    const REF_INITLIZATED: AtomicBool = AtomicBool::new(false);
+
+    /// Checks if the database has any users.
+    ///
+    /// If the database has at least one user, this function returns `Ok(true)`.
+    /// Otherwise, it returns `Ok(false)`.
+    ///
+    /// This function is used to check if the database has been initialized.
+    /// If the database has not been initialized, the application will
+    /// redirect to the initialization page.
+    pub async fn initlizated(state: &AppState) -> Result<bool> {
+        if !REF_INITLIZATED.load(Ordering::Relaxed) {
+            // check any user exists
+            let next = User::find().count(state.database.as_ref()).await? > 0;
+
+            // CAS false -> next
+            _ = REF_INITLIZATED.compare_exchange(false, next, Ordering::Relaxed, Ordering::Relaxed);
+
+            Ok(next)
+        } else {
+            Ok(true)
+        }
+    }
+
+    /// Initializes the application by creating the first admin user.
+    ///
+    /// This function will be called when the application is first started.
+    /// It will check if the database has been initialized (i.e., if the database
+    /// has at least one user). If the database has not been initialized, it will
+    /// create the first admin user with the given email and password.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database operations fail or user exists.
+    pub async fn initlizate(state: &AppState, email: &str, password: &str) -> Result<()> {
+        let algo = Argon2::default();
+
+        // generate salt
+        let salt = SaltString::generate(&mut OsRng);
+
+        // generate password hash
+        let hash = algo
+            .hash_password(password.as_bytes(), &salt)
+            .map_err(|e| anyhow!("generate password hash failed. {}", e))?
+            .to_string();
+
+        // persist user
+        User::insert(
+            user::Model {
+                id: Uuid::nil(),
+                sa: true,
+                nickname: "Admin".to_owned(),
+                email: email.to_owned(),
+                password: hash.to_owned(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }
+            .into_active_model(),
+        )
+        .exec(state.database.as_ref())
+        .await?;
+
+        Ok(())
+    }
 
     /// Generates a new captcha image and persists it in the database.
     ///
@@ -98,7 +199,6 @@ mod internal {
     /// # Errors
     ///
     /// Returns an error if the captcha is invalid.
-    #[allow(dead_code)]
     pub async fn captcha_verify(state: &AppState, id: &str, answer: &str) -> Result<()> {
         // load captcha from database
         let found = Captcha_::find()

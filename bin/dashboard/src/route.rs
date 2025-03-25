@@ -19,7 +19,7 @@ pub fn make(state: Arc<AppState>) -> Router {
 
 fn make_auth(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
-        .route("/init", routing::post(|| async { "" }))
+        .route("/init", routing::post(api::auth::init))
         .route("/captcha", routing::get(api::auth::captcha))
         .route("/authorize", routing::get(|| async { "" }))
         .route("/authorize", routing::post(|| async { "" }))
